@@ -8,9 +8,16 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
-// Install demo mode — all API calls handled client-side
-installDemoMode(api);
-
+// Only install demo mode if explicitly enabled (e.g. VITE_USE_DEMO=true)
+if (import.meta.env.VITE_USE_DEMO === 'true') {
+  installDemoMode(api);
+  console.log('🛡️ HireShield Demo Mode Activated');
+} else {
+  // Production mode — clear all temporary demo data from localStorage
+  localStorage.removeItem('hireshield_demo');
+  localStorage.removeItem('hireshield_resumes');
+  console.log('🌐 HireShield Production Mode - Connecting to Backend');
+}
 // Attach JWT token to every request
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token');
