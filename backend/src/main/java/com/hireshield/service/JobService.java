@@ -23,6 +23,11 @@ public class JobService {
     }
 
     public Job createJob(JobRequest request, User currentUser) {
+        String orgId = currentUser.getOrganizationId();
+        if (orgId == null || orgId.trim().isEmpty()) {
+            orgId = "org_" + currentUser.getId();
+        }
+
         Job job = Job.builder()
                 .title(request.getTitle())
                 .description(request.getDescription())
@@ -36,7 +41,7 @@ public class JobService {
                 .numberOfOpenings(request.getNumberOfOpenings())
                 .applicationDeadline(request.getApplicationDeadline())
                 .screeningCriteria(request.getScreeningCriteria() != null ? request.getScreeningCriteria() : new ArrayList<>())
-                .organizationId(currentUser.getOrganizationId())
+                .organizationId(orgId)
                 .publishedByUserId(currentUser.getId())
                 .active(true)
                 .published(true)

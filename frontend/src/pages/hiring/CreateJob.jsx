@@ -41,15 +41,20 @@ export default function CreateJob() {
     try {
       const payload = {
         ...form,
-        requiredSkills: form.requiredSkills.split(',').map(s => s.trim()).filter(Boolean),
-        screeningCriteria: form.screeningCriteria.filter(c => c.category && c.requirement),
-        screeningQuestions: form.screeningQuestions.filter(q => q.trim()),
+        requiredSkills: typeof form.requiredSkills === 'string'
+          ? form.requiredSkills.split(',').map(s => s.trim()).filter(Boolean)
+          : (form.requiredSkills || []),
+        screeningCriteria: (form.screeningCriteria || []).filter(c => c.category && c.requirement),
+        screeningQuestions: (form.screeningQuestions || []).filter(q => q && q.trim()),
         numberOfOpenings: parseInt(form.numberOfOpenings) || 1,
+        applicationDeadline: form.applicationDeadline ? form.applicationDeadline : null,
       };
       await jobAPI.createJob(payload);
       navigate('/hiring/jobs');
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to create job');
+      console.error('Create job error:', err);
+      const msg = err.response?.data?.message || err.response?.data?.error || err.message || 'Failed to create job';
+      setError(msg);
     } finally {
       setLoading(false);
     }

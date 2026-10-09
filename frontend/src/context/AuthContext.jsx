@@ -38,7 +38,10 @@ export function AuthProvider({ children }) {
   };
 
   const login = (userData, token) => {
-    localStorage.setItem('token', token);
+    const jwtToken = token || userData?.token;
+    if (jwtToken) {
+      localStorage.setItem('token', jwtToken);
+    }
     localStorage.setItem('user', JSON.stringify(userData));
     setUser(userData);
     loadProfile();

@@ -174,7 +174,7 @@ export default function Register() {
       const data = res.data.data;
       localStorage.setItem('token', data.token);
       localStorage.setItem('user', JSON.stringify(data));
-      login(data);
+      login(data, data.token);
       navigate(isHiring ? '/hiring/dashboard' : '/applicant/dashboard');
     } catch (err) {
       setError(err.response?.data?.message || 'Registration failed. Please try again.');
