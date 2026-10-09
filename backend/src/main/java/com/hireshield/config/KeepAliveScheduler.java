@@ -32,9 +32,13 @@ public class KeepAliveScheduler {
     public void keepAlive() {
         try {
             String pingUrl;
-            if (renderUrl != null && !renderUrl.isEmpty()) {
+            if (renderUrl != null && !renderUrl.trim().isEmpty()) {
                 // Production: Use the external Render URL
-                pingUrl = renderUrl + "/api/ping";
+                String base = renderUrl.trim().replaceAll("/+$", "");
+                if (!base.endsWith("/api")) {
+                    base += "/api";
+                }
+                pingUrl = base + "/ping";
             } else {
                 // Local: Ping localhost
                 pingUrl = "http://localhost:" + port + "/api/ping";

@@ -3,7 +3,8 @@ spring:
     name: hireshield-backend
   data:
     mongodb:
-      uri: ${MONGODB_URI:mongodb://localhost:27017/hireshield}
+      uri: ${MONGODB_URI:${MONGO_URI:mongodb://localhost:27017/hireshield}}
+      database: ${MONGO_DATABASE:${SPRING_DATA_MONGODB_DATABASE:hireshield}}
   servlet:
     multipart:
       max-file-size: 10MB

@@ -1,7 +1,12 @@
 import axios from 'axios';
 import { installDemoMode } from './demoMode';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080/api';
+const rawUrl = (import.meta.env.VITE_API_URL || 'http://localhost:8080/api').trim();
+let cleanUrl = rawUrl.replace(/\/+$/, '');
+if (!cleanUrl.endsWith('/api')) {
+  cleanUrl += '/api';
+}
+const API_URL = cleanUrl;
 
 const api = axios.create({
   baseURL: API_URL,
@@ -16,7 +21,7 @@ if (import.meta.env.VITE_USE_DEMO === 'true') {
   // Production mode — clear all temporary demo data from localStorage
   localStorage.removeItem('hireshield_demo');
   localStorage.removeItem('hireshield_resumes');
-  console.log('🌐 HireShield Production Mode - Connecting to Backend');
+  console.log('🌐 HireShield Production Mode - Connecting to Backend:', API_URL);
 }
 // Attach JWT token to every request
 api.interceptors.request.use((config) => {
