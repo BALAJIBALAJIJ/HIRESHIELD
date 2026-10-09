@@ -22,6 +22,7 @@ public class ScreeningQuestion {
 
     private String jobId;
     private String question;
+    private String type; // TEXT, YES_NO, MULTIPLE_CHOICE, TECHNICAL, BEHAVIORAL, etc.
     private int orderIndex;
     private boolean required;
 

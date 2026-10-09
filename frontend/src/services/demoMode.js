@@ -184,11 +184,73 @@ function screenApplication(application, job, profile) {
     explanation = `Application does not meet minimum requirements. Match score: ${Math.round(overallScore)}%. Key gaps: ${missingSkills.length > 0 ? missingSkills.join(', ') : 'general mismatch'}`;
   }
 
+  // Build failed requirements list
+  const failedRequirements = criteriaResults
+    .filter(c => c.type === 'MANDATORY' && !c.satisfied)
+    .map(c => `Mandatory ${c.category} requirement not demonstrated: ${c.requirement}`);
+
+  // Build warnings
+  const warnings = [];
+  if (aiAnalysis.riskLevel === 'MEDIUM') warnings.push('Moderate AI-content indicators detected in resume. Manual review recommended.');
+  if (aiAnalysis.riskLevel === 'HIGH') warnings.push('High AI-content indicators detected in resume. Manual review strongly recommended.');
+  if (missingSkills.length > 0) warnings.push(`Missing skills: ${missingSkills.join(', ')}`);
+
+  // Build reasons
+  const reasons = [];
+  if (status === 'ELIGIBLE') reasons.push(`Candidate matches job requirements with ${Math.round(overallScore)}% overall score.`);
+  if (status === 'NEEDS_REVIEW') reasons.push(explanation);
+  if (status === 'REJECTED') reasons.push(explanation);
+
+  // Preferred score
+  const preferredResults = criteriaResults.filter(c => c.type === 'PREFERRED');
+  const preferredMet = preferredResults.filter(c => c.satisfied).length;
+  const preferredScore = preferredResults.length > 0 ? (preferredMet * 100 / preferredResults.length) : 100;
+
   return {
     id: genId(), applicationId: application.id, jobId: job.id,
+    applicantUserId: application.applicantUserId,
     recommendedStatus: status, overallScore, overallExplanation: explanation,
     criteriaResults, matchedSkills, missingSkills,
-    resumeContentRisk: aiAnalysis.riskLevel, resumeAiConfidence: aiAnalysis.confidence,
+    // Enhanced score breakdown
+    skillsMatchScore: skillsScore,
+    experienceMatchScore: experienceScore,
+    qualificationMatchScore: qualificationScore,
+    mandatoryScore: mandatoryScore,
+    preferredScore: preferredScore,
+    answerRelevanceScore: 70, // default, updated when answers are analyzed
+    profileResumeConsistencyScore: 85, // profile-as-resume = consistent
+    crossValidationScore: 80,
+    // Risk fields
+    resumeContentRisk: aiAnalysis.riskLevel,
+    resumeAiConfidence: aiAnalysis.confidence,
+    aiContentRisk: aiAnalysis.riskLevel,
+    aiContentExplanation: aiAnalysis.riskLevel === 'LOW'
+      ? 'Resume content appears authentic with low AI-generation indicators.'
+      : 'Resume content shows indicators consistent with AI-generated text. This is a likelihood assessment, not a definitive determination.',
+    resumeAuthenticityRisk: aiAnalysis.riskLevel,
+    resumeAuthenticityExplanation: aiAnalysis.riskLevel === 'LOW'
+      ? 'No suspicious indicators found in resume content.'
+      : `Resume shows ${aiAnalysis.riskLevel} risk level for AI-generated content (confidence: ${Math.round(aiAnalysis.confidence * 100)}%).`,
+    resumeAnalysisDetails: aiAnalysis.riskLevel === 'LOW'
+      ? 'Resume content appears authentic.'
+      : 'Resume shows AI-generation indicators. Manual review recommended.',
+    // Consistency
+    inconsistencies: [],
+    contradictions: [],
+    crossValidationAssessment: 'CONSISTENT',
+    // Requirements
+    mandatoryRequirementsSatisfied: !mandatoryFailed,
+    preferredRequirementsSatisfied: preferredMet === preferredResults.length,
+    failedRequirements: failedRequirements,
+    warnings: warnings,
+    reasons: reasons,
+    // Review
+    needsHumanReview: status === 'NEEDS_REVIEW',
+    humanReviewStatus: null,
+    screenedAt: new Date().toISOString(),
+    // Answer analyses placeholder
+    answerAnalyses: [],
+    // Legacy matchScore for backward compat
     matchScore: {
       overall: overallScore, skillsMatch: skillsScore, experienceMatch: experienceScore,
       qualificationMatch: qualificationScore, mandatoryCriteriaMatch: mandatoryScore,
@@ -559,18 +621,27 @@ const mockHandlers = {
     application.matchScore = result.matchScore;
     application.resumeContentRisk = result.resumeContentRisk;
     application.resumeAiConfidence = result.resumeAiConfidence;
+    // Enhanced score breakdown on application
+    application.skillsMatchScore = result.skillsMatchScore;
+    application.experienceMatchScore = result.experienceMatchScore;
+    application.qualificationMatchScore = result.qualificationMatchScore;
+    application.mandatoryScore = result.mandatoryScore;
+    application.preferredScore = result.preferredScore;
+    application.answerRelevanceScore = result.answerRelevanceScore;
+    application.profileResumeConsistencyScore = result.profileResumeConsistencyScore;
+    application.crossValidationScore = result.crossValidationScore;
+    application.aiContentRisk = result.aiContentRisk;
+    application.resumeAuthenticityRisk = result.resumeAuthenticityRisk;
+    application.needsHumanReview = result.needsHumanReview;
 
     // ===== OVERRIDE STATUS IF AI ANSWERS DETECTED =====
     if (aiAnswerDetected) {
-      application.status = 'REJECTED';
-      application.rejectionReason = `🛡️ APPLICATION REJECTED — AI-Generated Content Detected in Screening Answers.\n\n` +
-        `Our AI screening system has detected that one or more of your screening answers contain AI-generated content. ` +
-        `This violates our application integrity policy.\n\n` +
-        `Detection Details:\n` +
-        aiDetectionDetails.map(d => `• ${d}`).join('\n') +
-        `\n\nAll applications must contain original, authentic responses. ` +
-        `If you believe this is an error, please contact the hiring team.`;
-      application.eligibilityExplanation = null;
+      application.status = 'NEEDS_REVIEW';
+      application.rejectionReason = null;
+      application.needsHumanReview = true;
+      application.eligibilityExplanation = `AI-generated content indicators detected in screening answers. ` +
+        `Manual review required.\n\nDetection Details:\n` +
+        aiDetectionDetails.map(d => `• ${d}`).join('\n');
     } else if (result.recommendedStatus === 'REJECTED') {
       application.status = 'REJECTED';
       application.rejectionReason = result.overallExplanation;
@@ -585,8 +656,8 @@ const mockHandlers = {
     
     if (aiAnswerDetected) {
       application.statusHistory.push({
-        fromStatus: 'SCREENING', toStatus: 'REJECTED',
-        reason: '🛡️ AI-generated content detected in screening answers. Application automatically rejected.',
+        fromStatus: 'SCREENING', toStatus: 'NEEDS_REVIEW',
+        reason: '⚠️ AI-generated content indicators detected in screening answers. Sent for manual review.',
         changedAt: new Date().toISOString(),
       });
     } else {
@@ -764,6 +835,24 @@ export function installDemoMode(axiosInstance) {
       const store = getStore();
       const questions = store.screeningQuestions.filter(q => q.jobId === jobId);
       config._mockResult = await delay(success('Questions retrieved', questions));
+      const ctrl = new AbortController(); ctrl.abort(); config.signal = ctrl.signal;
+      return config;
+    }
+
+    // POST /jobs/:id/screening-questions
+    if (method === 'POST' && /\/screening-questions$/.test(path)) {
+      const jobId = path.split('/')[2];
+      const store = getStore();
+      const question = {
+        id: genId(), jobId,
+        question: config.data.question,
+        type: config.data.type || 'TEXT',
+        required: config.data.required !== false,
+        createdAt: new Date().toISOString(),
+      };
+      store.screeningQuestions.push(question);
+      saveStore(store);
+      config._mockResult = await delay(success('Question added', question));
       const ctrl = new AbortController(); ctrl.abort(); config.signal = ctrl.signal;
       return config;
     }

@@ -14,6 +14,7 @@ import JobDetails from './pages/applicant/JobDetails';
 import MyApplications from './pages/applicant/MyApplications';
 import ApplicationDetails from './pages/ApplicationDetails';
 import Profile from './pages/Profile';
+import CreateNew from './pages/CreateNew';
 import './index.css';
 
 function ProtectedRoute({ children, requiredRole }) {
@@ -39,6 +40,7 @@ function AppRoutes() {
       {/* Hiring Team */}
       <Route path="/hiring/dashboard" element={<ProtectedRoute requiredRole="HIRING_TEAM"><Navbar /><div className="app-layout"><HiringDashboard /></div></ProtectedRoute>} />
       <Route path="/hiring/create-job" element={<ProtectedRoute requiredRole="HIRING_TEAM"><Navbar /><div className="app-layout"><CreateJob /></div></ProtectedRoute>} />
+      <Route path="/create-new" element={<ProtectedRoute><Navbar /><div className="app-layout"><CreateNew /></div></ProtectedRoute>} />
       <Route path="/hiring/jobs" element={<ProtectedRoute requiredRole="HIRING_TEAM"><Navbar /><div className="app-layout"><ManageJobs /></div></ProtectedRoute>} />
       <Route path="/hiring/jobs/:jobId/applicants" element={<ProtectedRoute requiredRole="HIRING_TEAM"><Navbar /><div className="app-layout"><ApplicantManagement /></div></ProtectedRoute>} />
 

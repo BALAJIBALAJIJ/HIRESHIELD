@@ -8,6 +8,7 @@ export default function ApplicantManagement() {
   const [applications, setApplications] = useState([]);
   const [filter, setFilter] = useState('ALL');
   const [loading, setLoading] = useState(true);
+  const [sortBy, setSortBy] = useState('score');
 
   useEffect(() => { loadData(); }, [jobId]);
 
@@ -31,7 +32,25 @@ export default function ApplicantManagement() {
   };
 
   const filtered = filter === 'ALL' ? applications : applications.filter(a => a.status === filter);
-  const filters = ['ALL', 'ELIGIBLE', 'REJECTED', 'NEEDS_REVIEW', 'SHORTLISTED', 'INTERVIEW', 'SELECTED'];
+
+  const sorted = [...filtered].sort((a, b) => {
+    if (sortBy === 'score') return (b.matchScore?.overall || 0) - (a.matchScore?.overall || 0);
+    if (sortBy === 'date') return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
+    if (sortBy === 'risk') {
+      const riskOrder = { HIGH: 3, MEDIUM: 2, LOW: 1 };
+      return (riskOrder[b.resumeContentRisk] || 0) - (riskOrder[a.resumeContentRisk] || 0);
+    }
+    return 0;
+  });
+
+  const filters = ['ALL', 'ELIGIBLE', 'NEEDS_REVIEW', 'REJECTED', 'SHORTLISTED', 'INTERVIEW', 'SELECTED', 'SCREENING'];
+  const counts = {};
+  filters.forEach(f => { counts[f] = f === 'ALL' ? applications.length : applications.filter(a => a.status === f).length; });
+
+  const RiskBadge = ({ level }) => {
+    const colors = { LOW: 'success', MEDIUM: 'warning', HIGH: 'danger' };
+    return <span className={`badge badge-${colors[level] || 'secondary'}`} style={{ fontSize: '0.7rem' }}>{level || 'N/A'}</span>;
+  };
 
   if (loading) return <div className="main-content"><div className="loading-spinner"><div className="spinner" /></div></div>;
 
@@ -43,81 +62,99 @@ export default function ApplicantManagement() {
         <p>{applications.length} total applications</p>
       </div>
 
-      {/* Filter Tabs */}
-      <div className="tabs">
-        {filters.map(f => (
-          <button key={f} className={`tab ${filter === f ? 'active' : ''}`} onClick={() => setFilter(f)}>
-            {f === 'ALL' ? `All (${applications.length})` : `${f.replace('_', ' ')} (${applications.filter(a => a.status === f).length})`}
-          </button>
+      {/* Stats Cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.75rem', marginBottom: '1.5rem' }}>
+        {[
+          { label: 'Total', count: counts.ALL, color: 'var(--text-primary)', icon: '📊' },
+          { label: 'Eligible', count: counts.ELIGIBLE, color: 'var(--success-500)', icon: '✅' },
+          { label: 'Review', count: counts.NEEDS_REVIEW, color: 'var(--warning-500)', icon: '⚠️' },
+          { label: 'Rejected', count: counts.REJECTED, color: 'var(--danger-500)', icon: '❌' },
+          { label: 'Shortlisted', count: counts.SHORTLISTED, color: 'var(--primary-500)', icon: '⭐' },
+          { label: 'Interview', count: counts.INTERVIEW, color: 'var(--accent-500)', icon: '📅' },
+        ].map(s => (
+          <div key={s.label} className="card" style={{ textAlign: 'center', padding: '0.75rem', cursor: 'pointer' }}
+            onClick={() => setFilter(s.label === 'Total' ? 'ALL' : s.label === 'Review' ? 'NEEDS_REVIEW' : s.label.toUpperCase())}>
+            <div style={{ fontSize: '1.1rem' }}>{s.icon}</div>
+            <div style={{ fontSize: '1.5rem', fontWeight: 800, color: s.color }}>{s.count}</div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{s.label}</div>
+          </div>
         ))}
       </div>
 
-      {/* Applications Table */}
-      {filtered.length > 0 ? (
-        <div className="card">
-          <table className="data-table">
-            <thead>
-              <tr><th>Applicant</th><th>Match Score</th><th>Status</th><th>AI Risk</th><th>Skills Match</th><th>Applied</th><th>Actions</th></tr>
-            </thead>
-            <tbody>
-              {filtered.map(app => (
-                <tr key={app.id}>
-                  <td>
-                    <div style={{ fontWeight: 600 }}>{app.applicantProfileId}</div>
-                    {app.resumeUrl && <a href={app.resumeUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.75rem' }}>📄 View Resume</a>}
-                  </td>
-                  <td>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <div style={{ width: 60 }}>
-                        <div className="progress-bar">
-                          <div className={`progress-bar-fill ${(app.matchScore?.overall || 0) >= 70 ? 'green' : (app.matchScore?.overall || 0) >= 50 ? 'yellow' : 'red'}`}
-                               style={{ width: `${app.matchScore?.overall || 0}%` }} />
-                        </div>
-                      </div>
-                      <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>{app.matchScore?.overall ? `${Math.round(app.matchScore.overall)}%` : '—'}</span>
-                    </div>
-                  </td>
-                  <td><span className={`badge badge-${app.status?.toLowerCase()}`}>{app.status}</span></td>
-                  <td><span className={`badge badge-${app.resumeContentRisk === 'LOW' ? 'success' : app.resumeContentRisk === 'HIGH' ? 'danger' : 'warning'}`}>{app.resumeContentRisk || 'N/A'}</span></td>
-                  <td style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                    {app.matchScore?.skillsMatch ? `${Math.round(app.matchScore.skillsMatch)}%` : '—'}
-                  </td>
-                  <td style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                    {app.createdAt ? new Date(app.createdAt).toLocaleDateString() : '—'}
-                  </td>
-                  <td>
-                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                      <Link to={`/applications/${app.id}`}><button className="btn btn-ghost btn-sm">Details</button></Link>
-                      {app.status === 'ELIGIBLE' && <button className="btn btn-sm btn-primary" onClick={() => updateStatus(app.id, 'SHORTLISTED')}>Shortlist</button>}
-                      {app.status === 'SHORTLISTED' && <button className="btn btn-sm btn-accent" onClick={() => updateStatus(app.id, 'INTERVIEW')}>Interview</button>}
-                      {app.status === 'NEEDS_REVIEW' && (
-                        <>
-                          <button className="btn btn-sm btn-success" onClick={() => updateStatus(app.id, 'ELIGIBLE', 'Manually approved after review')}>Approve</button>
-                          <button className="btn btn-sm btn-danger" onClick={() => updateStatus(app.id, 'REJECTED', 'Rejected after manual review')}>Reject</button>
-                        </>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {/* Filter Tabs + Sort */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1rem' }}>
+        <div className="tabs" style={{ overflowX: 'auto' }}>
+          {filters.map(f => (
+            <button key={f} className={`tab ${filter === f ? 'active' : ''}`} onClick={() => setFilter(f)}>
+              {f === 'ALL' ? `All (${counts.ALL})` : `${f.replace('_', ' ')} (${counts[f]})`}
+            </button>
+          ))}
         </div>
-      ) : (
-        <div className="card"><div className="empty-state"><div className="empty-icon">📋</div><h3>No Applications</h3><p>No applications match the selected filter.</p></div></div>
-      )}
+        <select value={sortBy} onChange={e => setSortBy(e.target.value)}
+          style={{ padding: '0.4rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-subtle)', background: 'var(--bg-card)', color: 'var(--text-primary)', fontSize: '0.8rem' }}>
+          <option value="score">Sort: Match Score</option>
+          <option value="date">Sort: Date</option>
+          <option value="risk">Sort: Risk Level</option>
+        </select>
+      </div>
 
-      {/* Screening Explanation */}
-      {filtered.some(a => a.eligibilityExplanation || a.rejectionReason) && (
-        <div className="card" style={{ marginTop: '1.5rem' }}>
-          <h3 className="card-title" style={{ marginBottom: '1rem' }}>Screening Explanations</h3>
-          {filtered.filter(a => a.eligibilityExplanation || a.rejectionReason).slice(0, 5).map(app => (
-            <div key={app.id} style={{ padding: '0.75rem', background: 'var(--bg-glass)', borderRadius: '8px', marginBottom: '0.5rem', fontSize: '0.85rem' }}>
-              <span className={`badge badge-${app.status?.toLowerCase()}`} style={{ marginRight: '0.5rem' }}>{app.status}</span>
-              {app.eligibilityExplanation || app.rejectionReason}
+      {/* Applications List */}
+      {sorted.length > 0 ? (
+        <div style={{ display: 'grid', gap: '0.75rem' }}>
+          {sorted.map(app => (
+            <div key={app.id} className="card" style={{ padding: '1rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
+                {/* Left: Applicant Info */}
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
+                    <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'var(--primary-500)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 700, fontSize: '0.8rem' }}>
+                      {(app.applicantProfileId || 'U').charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: '0.95rem' }}>{app.applicantProfileId || 'Applicant'}</div>
+                      <span className={`badge badge-${app.status?.toLowerCase()}`} style={{ fontSize: '0.7rem' }}>{app.status}</span>
+                    </div>
+                  </div>
+                  {app.resumeUrl && <a href={app.resumeUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.75rem' }}>📄 View Resume</a>}
+                </div>
+
+                {/* Center: Score Breakdown */}
+                <div style={{ flex: 2, minWidth: 280 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '0.4rem', fontSize: '0.78rem' }}>
+                    <div><span style={{ color: 'var(--text-muted)' }}>Match:</span> <strong>{app.matchScore?.overall ? `${Math.round(app.matchScore.overall)}%` : '—'}</strong></div>
+                    <div><span style={{ color: 'var(--text-muted)' }}>Skills:</span> <strong>{app.skillsMatchScore ? `${Math.round(app.skillsMatchScore)}%` : app.matchScore?.skillsMatch ? `${Math.round(app.matchScore.skillsMatch)}%` : '—'}</strong></div>
+                    <div><span style={{ color: 'var(--text-muted)' }}>Experience:</span> <strong>{app.experienceMatchScore ? `${Math.round(app.experienceMatchScore)}%` : '—'}</strong></div>
+                    <div><span style={{ color: 'var(--text-muted)' }}>Qualification:</span> <strong>{app.qualificationMatchScore ? `${Math.round(app.qualificationMatchScore)}%` : '—'}</strong></div>
+                    <div><span style={{ color: 'var(--text-muted)' }}>Resume Risk:</span> <RiskBadge level={app.resumeContentRisk} /></div>
+                    <div><span style={{ color: 'var(--text-muted)' }}>AI Risk:</span> <RiskBadge level={app.aiContentRisk} /></div>
+                  </div>
+                  {app.eligibilityExplanation && app.status !== 'REJECTED' && (
+                    <p style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: '0.4rem', lineHeight: 1.4 }}>{app.eligibilityExplanation.substring(0, 150)}{app.eligibilityExplanation.length > 150 ? '...' : ''}</p>
+                  )}
+                  {app.rejectionReason && app.status === 'REJECTED' && (
+                    <p style={{ fontSize: '0.76rem', color: 'var(--danger-500)', marginTop: '0.4rem' }}>❌ {app.rejectionReason.substring(0, 120)}...</p>
+                  )}
+                </div>
+
+                {/* Right: Actions */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', alignItems: 'flex-end' }}>
+                  <Link to={`/applications/${app.id}`}><button className="btn btn-ghost btn-sm">View Details</button></Link>
+                  {app.status === 'ELIGIBLE' && <button className="btn btn-sm btn-primary" onClick={() => updateStatus(app.id, 'SHORTLISTED')}>⭐ Shortlist</button>}
+                  {app.status === 'SHORTLISTED' && <button className="btn btn-sm btn-accent" onClick={() => updateStatus(app.id, 'INTERVIEW')}>📅 Interview</button>}
+                  {app.status === 'NEEDS_REVIEW' && (
+                    <>
+                      <button className="btn btn-sm btn-success" onClick={() => updateStatus(app.id, 'ELIGIBLE', 'Approved after review')}>✓ Approve</button>
+                      <button className="btn btn-sm btn-danger" onClick={() => updateStatus(app.id, 'REJECTED', 'Rejected after review')}>✗ Reject</button>
+                    </>
+                  )}
+                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{app.createdAt ? new Date(app.createdAt).toLocaleDateString() : ''}</span>
+                </div>
+              </div>
             </div>
           ))}
         </div>
+      ) : (
+        <div className="card"><div className="empty-state"><div className="empty-icon">📋</div><h3>No Applications</h3><p>No applications match the selected filter.</p></div></div>
       )}
     </div>
   );

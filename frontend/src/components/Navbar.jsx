@@ -26,7 +26,7 @@ export default function Navbar() {
           <>
             <Link to="/hiring/dashboard">Dashboard</Link>
             <Link to="/hiring/jobs">Jobs</Link>
-            <Link to="/hiring/create-job">Post Job</Link>
+            <Link to="/create-new"><button className="btn btn-primary btn-sm">+ Create New</button></Link>
           </>
         ) : (
           <>

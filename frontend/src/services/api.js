@@ -75,6 +75,7 @@ export const jobAPI = {
   updateJob: (id, data) => api.put(`/jobs/${id}`, data),
   deleteJob: (id) => api.delete(`/jobs/${id}`),
   getScreeningQuestions: (jobId) => api.get(`/jobs/${jobId}/screening-questions`),
+  addScreeningQuestion: (jobId, data) => api.post(`/jobs/${jobId}/screening-questions`, data),
 };
 
 // === Application APIs ===

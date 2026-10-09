@@ -45,11 +45,28 @@ public class Application {
     // AI Content Analysis
     private ContentRiskLevel resumeContentRisk;
     private double resumeAiConfidence;
+    private ContentRiskLevel aiContentRisk;
 
     // Screening Result Summary
     private String screeningResultId;
     private String rejectionReason;
     private String eligibilityExplanation;
+
+    // AI Screening Score Breakdown
+    private double skillsMatchScore;
+    private double experienceMatchScore;
+    private double qualificationMatchScore;
+    private double mandatoryScore;
+    private double preferredScore;
+    private double answerRelevanceScore;
+    private double profileResumeConsistencyScore;
+    private double crossValidationScore;
+
+    // Risk Levels
+    private String resumeAuthenticityRisk;
+
+    // Needs Human Review flag
+    private boolean needsHumanReview;
 
     // Internal Notes (by hiring team)
     @Builder.Default

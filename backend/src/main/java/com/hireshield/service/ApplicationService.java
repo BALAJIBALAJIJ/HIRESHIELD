@@ -4,6 +4,8 @@ import com.hireshield.model.*;
 import com.hireshield.model.enums.ApplicationStatus;
 import com.hireshield.model.enums.ContentRiskLevel;
 import com.hireshield.repository.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -13,6 +15,8 @@ import java.util.Map;
 
 @Service
 public class ApplicationService {
+
+    private static final Logger log = LoggerFactory.getLogger(ApplicationService.class);
 
     private final ApplicationRepository applicationRepository;
     private final ApplicantProfileRepository applicantProfileRepository;
@@ -40,7 +44,6 @@ public class ApplicationService {
 
     public Application applyForJob(String jobId, String applicantUserId, String resumeUrl,
                                     String resumeFileName, String resumePublicId) {
-        // Check if already applied
         if (applicationRepository.existsByJobIdAndApplicantUserId(jobId, applicantUserId)) {
             throw new RuntimeException("You have already applied for this job");
         }
@@ -53,7 +56,6 @@ public class ApplicationService {
         ApplicantProfile profile = applicantProfileRepository.findByUserId(applicantUserId)
                 .orElseThrow(() -> new RuntimeException("Applicant profile not found"));
 
-        // Use provided resume or fall back to profile resume
         String finalResumeUrl = resumeUrl != null ? resumeUrl : profile.getResumeUrl();
         String finalResumeFileName = resumeFileName != null ? resumeFileName : profile.getResumeFileName();
         String finalResumePublicId = resumePublicId != null ? resumePublicId : profile.getResumePublicId();
@@ -78,37 +80,57 @@ public class ApplicationService {
 
         application = applicationRepository.save(application);
 
-        // Update job stats
         jobService.incrementApplicationCount(jobId);
 
-        // Run automated screening
+        // Run AI screening pipeline
         performScreening(application, job, profile);
 
         return applicationRepository.findById(application.getId()).orElse(application);
     }
 
     private void performScreening(Application application, Job job, ApplicantProfile profile) {
-        // Update status to SCREENING
-        updateStatus(application, ApplicationStatus.SCREENING, null, "Automated screening in progress");
+        updateStatus(application, ApplicationStatus.SCREENING, null, "AI screening pipeline in progress");
 
-        // Run the AI screening
-        ScreeningResult result = screeningService.screenApplication(application, job, profile);
+        try {
+            ScreeningResult result = screeningService.screenApplication(application, job, profile);
+            applyScreeningResult(application, result, job);
+        } catch (Exception e) {
+            log.error("Screening failed for application {}: {}", application.getId(), e.getMessage());
+            updateStatus(application, ApplicationStatus.NEEDS_REVIEW, null,
+                    "Automated screening encountered an error. Manual review required.");
+        }
+    }
 
-        // Update application with screening results
+    private void applyScreeningResult(Application application, ScreeningResult result, Job job) {
         application.setScreeningResultId(result.getId());
         application.setMatchScore(Application.MatchScore.builder()
                 .overall(result.getOverallScore())
-                .skillsMatch(calculateComponentScore(result, "skills"))
-                .experienceMatch(calculateComponentScore(result, "experience"))
-                .qualificationMatch(calculateComponentScore(result, "qualification"))
-                .mandatoryCriteriaMatch(calculateComponentScore(result, "mandatory"))
-                .jobRelevance(calculateComponentScore(result, "relevance"))
+                .skillsMatch(result.getSkillsMatchScore())
+                .experienceMatch(result.getExperienceMatchScore())
+                .qualificationMatch(result.getQualificationMatchScore())
+                .mandatoryCriteriaMatch(result.getMandatoryScore())
+                .jobRelevance(result.getOverallScore())
                 .explanation(result.getOverallExplanation())
                 .build());
+
+        // Set all score breakdowns on the application
+        application.setSkillsMatchScore(result.getSkillsMatchScore());
+        application.setExperienceMatchScore(result.getExperienceMatchScore());
+        application.setQualificationMatchScore(result.getQualificationMatchScore());
+        application.setMandatoryScore(result.getMandatoryScore());
+        application.setPreferredScore(result.getPreferredScore());
+        application.setAnswerRelevanceScore(result.getAnswerRelevanceScore());
+        application.setProfileResumeConsistencyScore(result.getProfileResumeConsistencyScore());
+        application.setCrossValidationScore(result.getCrossValidationScore());
+
+        // Set risk levels
         application.setResumeContentRisk(result.getResumeContentRisk());
         application.setResumeAiConfidence(result.getResumeAiConfidence());
+        application.setAiContentRisk(result.getAiContentRisk());
+        application.setResumeAuthenticityRisk(result.getResumeAuthenticityRisk());
+        application.setNeedsHumanReview(result.isNeedsHumanReview());
 
-        // Set final status based on screening
+        // Set final status
         ApplicationStatus finalStatus = result.getRecommendedStatus();
         if (finalStatus == ApplicationStatus.REJECTED) {
             application.setRejectionReason(result.getOverallExplanation());
@@ -120,30 +142,11 @@ public class ApplicationService {
 
         updateStatus(application, finalStatus, null, result.getOverallExplanation());
 
-        // Send notification to applicant
         createNotification(application.getApplicantUserId(),
                 "Application Update",
                 "Your application for " + job.getTitle() + " has been reviewed. Status: " + finalStatus.name(),
                 "APPLICATION_STATUS",
                 application.getId());
-    }
-
-    private double calculateComponentScore(ScreeningResult result, String component) {
-        // Calculate individual component scores from the screening result
-        switch (component) {
-            case "skills":
-                if (result.getMatchedSkills().isEmpty() && result.getMissingSkills().isEmpty()) return 80;
-                int total = result.getMatchedSkills().size() + result.getMissingSkills().size();
-                return total > 0 ? (result.getMatchedSkills().size() * 100.0 / total) : 80;
-            case "mandatory":
-                long mandatoryTotal = result.getCriteriaResults().stream()
-                        .filter(c -> c.getType().equals("MANDATORY")).count();
-                long mandatoryMet = result.getCriteriaResults().stream()
-                        .filter(c -> c.getType().equals("MANDATORY") && c.isSatisfied()).count();
-                return mandatoryTotal > 0 ? (mandatoryMet * 100.0 / mandatoryTotal) : 100;
-            default:
-                return result.getOverallScore();
-        }
     }
 
     public Application updateApplicationStatus(String applicationId, String newStatus,
@@ -157,7 +160,6 @@ public class ApplicationService {
 
         updateStatus(application, status, changedByUserId, reason);
 
-        // Notify applicant
         Job job = jobService.getJobById(application.getJobId());
         createNotification(application.getApplicantUserId(),
                 "Application Status Update",
@@ -212,6 +214,11 @@ public class ApplicationService {
         }
 
         Job job = jobService.getJobById(application.getJobId());
+        ApplicantProfile profile = applicantProfileRepository.findByUserId(applicantUserId)
+                .orElseThrow(() -> new RuntimeException("Profile not found"));
+
+        // Build Q&A list for AI
+        List<Map<String, String>> questionsAndAnswers = new ArrayList<>();
 
         for (Map<String, String> answerData : answers) {
             String questionId = answerData.get("questionId");
@@ -239,6 +246,19 @@ public class ApplicationService {
                     .build();
 
             screeningAnswerRepository.save(screeningAnswer);
+
+            questionsAndAnswers.add(Map.of(
+                    "question", question.getQuestion(),
+                    "answer", answerText
+            ));
+        }
+
+        // Run full AI screening with answers
+        try {
+            ScreeningResult result = screeningService.screenWithAnswers(application, job, profile, questionsAndAnswers);
+            applyScreeningResult(application, result, job);
+        } catch (Exception e) {
+            log.error("Full screening with answers failed: {}", e.getMessage());
         }
     }
 

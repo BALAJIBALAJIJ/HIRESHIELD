@@ -5,494 +5,329 @@ import com.hireshield.model.enums.ApplicationStatus;
 import com.hireshield.model.enums.ContentRiskLevel;
 import com.hireshield.model.enums.RequirementType;
 import com.hireshield.repository.ScreeningResultRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * AI-assisted screening engine that analyzes resumes and answers against job requirements.
- * Uses rule-based analysis with NLP heuristics for explainable, transparent scoring.
- * Never claims 100% certainty — all AI detection uses confidence-based indicators.
+ * Screening service that orchestrates the full AI screening pipeline.
+ * Uses Gemini for deep analysis with heuristic fallback.
  */
 @Service
 public class ScreeningService {
 
+    private static final Logger log = LoggerFactory.getLogger(ScreeningService.class);
+
     private final ScreeningResultRepository screeningResultRepository;
+    private final AIScreeningPipeline aiPipeline;
+    private final GeminiService geminiService;
 
-    // Common AI-generated content indicators
-    private static final List<String> AI_INDICATORS = List.of(
-            "leveraged", "spearheaded", "orchestrated", "synergized", "facilitated",
-            "utilized cutting-edge", "drove innovation", "passionate about",
-            "results-driven professional", "proven track record",
-            "detail-oriented", "self-motivated", "team player",
-            "highly motivated", "dynamic professional"
-    );
-
-    private static final List<String> FABRICATION_INDICATORS = List.of(
-            "lorem ipsum", "placeholder", "sample text", "test data",
-            "john doe", "jane doe", "example.com", "xxx"
-    );
-
-    public ScreeningService(ScreeningResultRepository screeningResultRepository) {
+    public ScreeningService(ScreeningResultRepository screeningResultRepository,
+                            AIScreeningPipeline aiPipeline,
+                            GeminiService geminiService) {
         this.screeningResultRepository = screeningResultRepository;
+        this.aiPipeline = aiPipeline;
+        this.geminiService = geminiService;
     }
 
     /**
-     * Perform comprehensive screening of an application against job requirements.
+     * Full screening pipeline with Gemini AI.
      */
+    @SuppressWarnings("unchecked")
     public ScreeningResult screenApplication(Application application, Job job, ApplicantProfile profile) {
-        List<ScreeningResult.CriterionResult> criteriaResults = new ArrayList<>();
-        List<String> matchedSkills = new ArrayList<>();
-        List<String> missingSkills = new ArrayList<>();
+        log.info("Starting AI screening pipeline for application: {}", application.getId());
 
-        // 1. Skills matching
-        double skillsScore = analyzeSkills(job.getRequiredSkills(), profile.getSkills(), matchedSkills, missingSkills);
+        // Step 1: Resume Analysis (if resume available)
+        Map<String, Object> resumeData = null;
+        // For now, we use profile data as resume proxy. When base64 resume is available, use aiPipeline.analyzeResume()
+        resumeData = createResumeDataFromProfile(profile);
 
-        // 2. Experience matching
-        double experienceScore = analyzeExperience(job.getRequiredExperience(), profile.getYearsOfExperience());
+        // Step 2: Profile-Resume Consistency
+        Map<String, Object> consistencyResult = aiPipeline.checkProfileResumeConsistency(profile, resumeData);
+        log.info("Profile-Resume consistency score: {}", consistencyResult.get("consistencyScore"));
 
-        // 3. Qualification matching
-        double qualificationScore = analyzeQualification(job.getRequiredQualification(), profile.getEducation());
+        // Step 3: Job Matching
+        Map<String, Object> jobMatch = aiPipeline.matchResumeToJob(resumeData, profile, job);
+        log.info("Job match score: {}", jobMatch.get("jobMatchScore"));
 
-        // 4. Screening criteria evaluation
-        double mandatoryScore = evaluateScreeningCriteria(job.getScreeningCriteria(), profile, criteriaResults);
+        // Step 4: Generate Final Decision
+        Map<String, Object> finalDecision = aiPipeline.generateFinalDecision(
+                jobMatch, consistencyResult, Map.of("crossValidationScore", 80, "isConsistent", true),
+                resumeData, List.of());
 
-        // 5. Job relevance based on profile summary and title
-        double relevanceScore = analyzeJobRelevance(job, profile);
-
-        // 6. AI content analysis of resume
-        ContentRiskLevel resumeRisk = ContentRiskLevel.LOW;
-        double aiConfidence = 0.1;
-        if (profile.getProfessionalSummary() != null) {
-            Map<String, Object> aiAnalysis = analyzeContentAuthenticity(profile.getProfessionalSummary());
-            resumeRisk = (ContentRiskLevel) aiAnalysis.get("riskLevel");
-            aiConfidence = (double) aiAnalysis.get("confidence");
-        }
-
-        // Calculate overall score
-        double overallScore = calculateOverallScore(skillsScore, experienceScore, qualificationScore, mandatoryScore, relevanceScore);
-
-        // Determine recommended status
-        boolean mandatoryFailed = criteriaResults.stream()
-                .anyMatch(cr -> cr.getType().equals("MANDATORY") && !cr.isSatisfied());
-
-        ApplicationStatus recommendedStatus;
-        String explanation;
-
-        if (mandatoryFailed) {
-            recommendedStatus = ApplicationStatus.REJECTED;
-            String failedCriteria = criteriaResults.stream()
-                    .filter(cr -> cr.getType().equals("MANDATORY") && !cr.isSatisfied())
-                    .map(ScreeningResult.CriterionResult::getExplanation)
-                    .collect(Collectors.joining("; "));
-            explanation = "Application rejected: Mandatory requirements not satisfied. " + failedCriteria;
-        } else if (resumeRisk == ContentRiskLevel.HIGH) {
-            recommendedStatus = ApplicationStatus.NEEDS_REVIEW;
-            explanation = "Candidate meets requirements but resume content shows high AI-generated likelihood (confidence: "
-                    + String.format("%.0f%%", aiConfidence * 100) + "). Manual review recommended.";
-        } else if (overallScore >= 70) {
-            recommendedStatus = ApplicationStatus.ELIGIBLE;
-            explanation = "Candidate matches the job requirements with a score of " + String.format("%.0f%%", overallScore)
-                    + ". Skills, experience, and qualifications align well with the position.";
-        } else if (overallScore >= 50) {
-            recommendedStatus = ApplicationStatus.NEEDS_REVIEW;
-            explanation = "Candidate partially matches requirements (score: " + String.format("%.0f%%", overallScore)
-                    + "). Some criteria are met but manual review is recommended.";
-        } else {
-            recommendedStatus = ApplicationStatus.REJECTED;
-            explanation = "Application does not meet minimum requirements. Match score: "
-                    + String.format("%.0f%%", overallScore) + ". Key gaps: "
-                    + (missingSkills.isEmpty() ? "general mismatch" : String.join(", ", missingSkills));
-        }
-
-        ScreeningResult result = ScreeningResult.builder()
-                .applicationId(application.getId())
-                .jobId(job.getId())
-                .applicantUserId(application.getApplicantUserId())
-                .recommendedStatus(recommendedStatus)
-                .overallScore(overallScore)
-                .overallExplanation(explanation)
-                .criteriaResults(criteriaResults)
-                .matchedSkills(matchedSkills)
-                .missingSkills(missingSkills)
-                .resumeContentRisk(resumeRisk)
-                .resumeAiConfidence(aiConfidence)
-                .resumeAnalysisDetails(resumeRisk == ContentRiskLevel.LOW
-                        ? "Resume content appears authentic with low AI-generation indicators."
-                        : "Resume content shows indicators consistent with AI-generated text. This is a likelihood assessment, not a definitive determination.")
-                .build();
+        // Build ScreeningResult from AI response
+        ScreeningResult result = buildScreeningResult(application, job, finalDecision, jobMatch, consistencyResult, resumeData);
 
         return screeningResultRepository.save(result);
     }
 
     /**
-     * Analyze skills match between required and candidate skills.
+     * Screen application WITH screening answers (called after answers are submitted).
      */
-    private double analyzeSkills(List<String> required, List<String> candidate,
-                                  List<String> matched, List<String> missing) {
-        if (required == null || required.isEmpty()) return 80.0;
-        if (candidate == null || candidate.isEmpty()) {
-            missing.addAll(required);
-            return 0.0;
-        }
+    @SuppressWarnings("unchecked")
+    public ScreeningResult screenWithAnswers(Application application, Job job, ApplicantProfile profile,
+                                              List<Map<String, String>> questionsAndAnswers) {
+        log.info("Starting full AI screening with answers for application: {}", application.getId());
 
-        Set<String> candidateSkillsLower = candidate.stream()
-                .map(String::toLowerCase)
-                .map(String::trim)
-                .collect(Collectors.toSet());
+        Map<String, Object> resumeData = createResumeDataFromProfile(profile);
 
-        for (String skill : required) {
-            String skillLower = skill.toLowerCase().trim();
-            boolean found = candidateSkillsLower.stream()
-                    .anyMatch(cs -> cs.contains(skillLower) || skillLower.contains(cs));
-            if (found) {
-                matched.add(skill);
-            } else {
-                missing.add(skill);
+        // Step 1: Profile-Resume Consistency
+        Map<String, Object> consistencyResult = aiPipeline.checkProfileResumeConsistency(profile, resumeData);
+
+        // Step 2: Job Matching
+        Map<String, Object> jobMatch = aiPipeline.matchResumeToJob(resumeData, profile, job);
+
+        // Step 3: Analyze each answer
+        List<Map<String, Object>> answerAnalyses = new ArrayList<>();
+        if (questionsAndAnswers != null) {
+            for (Map<String, String> qa : questionsAndAnswers) {
+                Map<String, Object> answerResult = aiPipeline.analyzeAnswer(
+                        qa.get("question"), qa.get("answer"), job, profile, resumeData);
+                answerResult.put("question", qa.get("question"));
+                answerResult.put("answer", qa.get("answer"));
+                answerAnalyses.add(answerResult);
             }
         }
 
-        return required.isEmpty() ? 80.0 : (matched.size() * 100.0 / required.size());
+        // Step 4: Cross-Validation
+        Map<String, Object> crossValidation = aiPipeline.crossValidate(profile, resumeData, questionsAndAnswers, job);
+
+        // Step 5: Final Decision
+        Map<String, Object> finalDecision = aiPipeline.generateFinalDecision(
+                jobMatch, consistencyResult, crossValidation, resumeData, answerAnalyses);
+
+        // Build comprehensive result
+        ScreeningResult result = buildScreeningResult(application, job, finalDecision, jobMatch, consistencyResult, resumeData);
+        result.setAnswerAnalyses(answerAnalyses);
+        result.setCrossValidationScore(getDouble(crossValidation, "crossValidationScore", 80));
+        result.setCrossValidationAssessment(getString(crossValidation, "overallAssessment", "CONSISTENT"));
+        result.setContradictions((List<Map<String, Object>>) crossValidation.getOrDefault("contradictions", List.of()));
+
+        // Calculate answer relevance average
+        if (!answerAnalyses.isEmpty()) {
+            double avgRelevance = answerAnalyses.stream()
+                    .mapToDouble(a -> getDouble(a, "relevanceScore", 60))
+                    .average().orElse(60);
+            result.setAnswerRelevanceScore(avgRelevance);
+        }
+
+        return screeningResultRepository.save(result);
     }
 
-    /**
-     * Analyze experience match.
-     */
-    private double analyzeExperience(String requiredExp, int candidateYears) {
-        if (requiredExp == null || requiredExp.isEmpty()) return 80.0;
-
-        try {
-            // Try to extract a number from the required experience string
-            String digits = requiredExp.replaceAll("[^0-9]", "");
-            if (digits.isEmpty()) return 70.0;
-
-            int requiredYears = Integer.parseInt(digits);
-            if (candidateYears >= requiredYears) return 100.0;
-            if (candidateYears >= requiredYears - 1) return 75.0;
-            if (candidateYears > 0) return (candidateYears * 100.0 / requiredYears);
-            return 20.0;
-        } catch (NumberFormatException e) {
-            return 70.0; // Can't parse, give moderate score
-        }
-    }
-
-    /**
-     * Analyze qualification match.
-     */
-    private double analyzeQualification(String required, String candidateEdu) {
-        if (required == null || required.isEmpty()) return 80.0;
-        if (candidateEdu == null || candidateEdu.isEmpty()) return 30.0;
-
-        String reqLower = required.toLowerCase();
-        String candLower = candidateEdu.toLowerCase();
-
-        // Check for common degree patterns
-        Map<String, List<String>> degreeAliases = Map.of(
-                "b.e", List.of("be", "b.e", "bachelor of engineering", "btech", "b.tech"),
-                "b.tech", List.of("btech", "b.tech", "bachelor of technology", "be", "b.e"),
-                "m.tech", List.of("mtech", "m.tech", "master of technology", "me", "m.e"),
-                "mba", List.of("mba", "master of business"),
-                "mca", List.of("mca", "master of computer application"),
-                "bca", List.of("bca", "bachelor of computer application"),
-                "phd", List.of("phd", "ph.d", "doctorate", "doctor of philosophy"),
-                "bsc", List.of("bsc", "b.sc", "bachelor of science"),
-                "msc", List.of("msc", "m.sc", "master of science")
-        );
-
-        for (Map.Entry<String, List<String>> entry : degreeAliases.entrySet()) {
-            boolean reqMatches = entry.getValue().stream().anyMatch(reqLower::contains);
-            boolean candMatches = entry.getValue().stream().anyMatch(candLower::contains);
-            if (reqMatches && candMatches) return 100.0;
+    @SuppressWarnings("unchecked")
+    private ScreeningResult buildScreeningResult(Application application, Job job,
+                                                  Map<String, Object> finalDecision,
+                                                  Map<String, Object> jobMatch,
+                                                  Map<String, Object> consistency,
+                                                  Map<String, Object> resumeData) {
+        String decision = getString(finalDecision, "decision", "NEEDS_REVIEW");
+        ApplicationStatus status;
+        switch (decision) {
+            case "ELIGIBLE": status = ApplicationStatus.ELIGIBLE; break;
+            case "REJECTED": status = ApplicationStatus.REJECTED; break;
+            default: status = ApplicationStatus.NEEDS_REVIEW;
         }
 
-        if (candLower.contains(reqLower) || reqLower.contains(candLower)) return 90.0;
-        return 40.0;
-    }
+        String resumeRiskStr = getString(finalDecision, "resumeAuthenticityRisk", "LOW");
+        ContentRiskLevel resumeRisk;
+        try { resumeRisk = ContentRiskLevel.valueOf(resumeRiskStr); } catch (Exception e) { resumeRisk = ContentRiskLevel.LOW; }
 
-    /**
-     * Evaluate screening criteria (mandatory vs preferred).
-     */
-    private double evaluateScreeningCriteria(List<Job.ScreeningCriterion> criteria,
-                                              ApplicantProfile profile,
-                                              List<ScreeningResult.CriterionResult> results) {
-        if (criteria == null || criteria.isEmpty()) return 100.0;
+        String aiRiskStr = getString(finalDecision, "aiContentRisk", "LOW");
+        ContentRiskLevel aiRisk;
+        try { aiRisk = ContentRiskLevel.valueOf(aiRiskStr); } catch (Exception e) { aiRisk = ContentRiskLevel.LOW; }
 
-        int mandatoryTotal = 0, mandatoryMet = 0;
-        int preferredTotal = 0, preferredMet = 0;
-
-        String profileText = buildProfileText(profile);
-
-        for (Job.ScreeningCriterion criterion : criteria) {
-            boolean satisfied = checkCriterion(criterion, profile, profileText);
-            String explanation = satisfied
-                    ? "Candidate satisfies the " + criterion.getCategory() + " requirement: " + criterion.getRequirement()
-                    : "Candidate does not satisfy the " + criterion.getCategory() + " requirement: " + criterion.getRequirement();
-
-            results.add(ScreeningResult.CriterionResult.builder()
-                    .category(criterion.getCategory())
-                    .requirement(criterion.getRequirement())
-                    .type(criterion.getType().name())
-                    .satisfied(satisfied)
-                    .explanation(explanation)
-                    .confidence(satisfied ? 0.85 : 0.80)
-                    .build());
-
-            if (criterion.getType() == RequirementType.MANDATORY) {
-                mandatoryTotal++;
-                if (satisfied) mandatoryMet++;
-            } else {
-                preferredTotal++;
-                if (satisfied) preferredMet++;
-            }
-        }
-
-        if (mandatoryTotal > 0 && mandatoryMet < mandatoryTotal) return 0.0;
-
-        double mandatoryScore = mandatoryTotal > 0 ? (mandatoryMet * 100.0 / mandatoryTotal) : 100.0;
-        double preferredScore = preferredTotal > 0 ? (preferredMet * 100.0 / preferredTotal) : 100.0;
-
-        return mandatoryScore * 0.7 + preferredScore * 0.3;
-    }
-
-    /**
-     * Check if a criterion is satisfied by the candidate.
-     */
-    private boolean checkCriterion(Job.ScreeningCriterion criterion, ApplicantProfile profile, String profileText) {
-        String req = criterion.getRequirement().toLowerCase().trim();
-        String category = criterion.getCategory().toLowerCase();
-
-        // Check skills
-        if (category.contains("skill") || category.contains("programming") || category.contains("technology") || category.contains("technical")) {
-            return profile.getSkills() != null && profile.getSkills().stream()
-                    .anyMatch(s -> s.toLowerCase().contains(req) || req.contains(s.toLowerCase()));
-        }
-
-        // Check education/degree
-        if (category.contains("degree") || category.contains("qualification") || category.contains("education")) {
-            return profile.getEducation() != null && (
-                    profile.getEducation().toLowerCase().contains(req) || req.contains(profile.getEducation().toLowerCase()));
-        }
-
-        // Check certification
-        if (category.contains("certification") || category.contains("certificate")) {
-            return profile.getCertifications() != null && profile.getCertifications().stream()
-                    .anyMatch(c -> c.toLowerCase().contains(req) || req.contains(c.toLowerCase()));
-        }
-
-        // Check experience
-        if (category.contains("experience") || category.contains("years")) {
-            try {
-                String digits = req.replaceAll("[^0-9]", "");
-                if (!digits.isEmpty()) {
-                    int requiredYears = Integer.parseInt(digits);
-                    return profile.getYearsOfExperience() >= requiredYears;
+        // Build criteria results from jobMatch
+        List<ScreeningResult.CriterionResult> criteriaResults = new ArrayList<>();
+        Object criteriaObj = jobMatch.get("criteriaResults");
+        if (criteriaObj instanceof List) {
+            for (Object item : (List<?>) criteriaObj) {
+                if (item instanceof Map) {
+                    Map<String, Object> cr = (Map<String, Object>) item;
+                    criteriaResults.add(ScreeningResult.CriterionResult.builder()
+                            .category(getString(cr, "category", ""))
+                            .requirement(getString(cr, "requirement", ""))
+                            .type(getString(cr, "type", "PREFERRED"))
+                            .satisfied(getBool(cr, "satisfied", true))
+                            .explanation(getString(cr, "explanation", ""))
+                            .confidence(getDouble(cr, "confidence", 0.7))
+                            .build());
                 }
-            } catch (NumberFormatException e) {
-                // Fall through to text matching
             }
         }
 
-        // Generic text-based matching
-        return profileText.contains(req);
+        // Build explanation
+        List<String> reasons = new ArrayList<>();
+        Object reasonsObj = finalDecision.get("reasons");
+        if (reasonsObj instanceof List) {
+            for (Object r : (List<?>) reasonsObj) reasons.add(r.toString());
+        }
+
+        List<String> warnings = new ArrayList<>();
+        Object warningsObj = finalDecision.get("warnings");
+        if (warningsObj instanceof List) {
+            for (Object w : (List<?>) warningsObj) warnings.add(w.toString());
+        }
+
+        List<String> failedReqs = new ArrayList<>();
+        Object failedObj = finalDecision.get("failedRequirements");
+        if (failedObj instanceof List) {
+            for (Object f : (List<?>) failedObj) failedReqs.add(f.toString());
+        }
+
+        String explanation = reasons.isEmpty()
+                ? "Screening completed. Decision: " + decision
+                : String.join(" ", reasons);
+
+        return ScreeningResult.builder()
+                .applicationId(application.getId())
+                .jobId(job.getId())
+                .applicantUserId(application.getApplicantUserId())
+                .recommendedStatus(status)
+                .overallScore(getDouble(finalDecision, "jobMatchScore", 70))
+                .overallExplanation(explanation)
+                .skillsMatchScore(getDouble(finalDecision, "skillsMatchScore", 70))
+                .experienceMatchScore(getDouble(finalDecision, "experienceMatchScore", 70))
+                .qualificationMatchScore(getDouble(finalDecision, "qualificationMatchScore", 70))
+                .mandatoryScore(getDouble(finalDecision, "mandatoryScore", 100))
+                .preferredScore(getDouble(finalDecision, "preferredScore", 70))
+                .answerRelevanceScore(getDouble(finalDecision, "answerRelevanceScore", 70))
+                .profileResumeConsistencyScore(getDouble(consistency, "consistencyScore", 85))
+                .crossValidationScore(getDouble(finalDecision, "crossValidationScore", 80))
+                .criteriaResults(criteriaResults)
+                .matchedSkills((List<String>) jobMatch.getOrDefault("matchedSkills", List.of()))
+                .missingSkills((List<String>) jobMatch.getOrDefault("missingSkills", List.of()))
+                .resumeContentRisk(resumeRisk)
+                .resumeAiConfidence(getDouble(finalDecision, "aiGenerationRiskScore", 10) / 100.0)
+                .resumeAnalysisDetails(getString(resumeData, "authenticityExplanation", ""))
+                .aiContentRisk(aiRisk)
+                .resumeAuthenticityRisk(resumeRiskStr)
+                .parsedResumeData(resumeData)
+                .needsHumanReview(getBool(finalDecision, "needsHumanReview", false))
+                .failedRequirements(failedReqs)
+                .warnings(warnings)
+                .reasons(reasons)
+                .build();
+    }
+
+    private Map<String, Object> createResumeDataFromProfile(ApplicantProfile profile) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("fullName", profile.getFullName());
+        data.put("professionalTitle", profile.getProfessionalTitle());
+        data.put("education", profile.getEducation());
+        data.put("allSkillsList", profile.getSkills() != null ? profile.getSkills() : List.of());
+        data.put("totalYearsOfExperience", profile.getYearsOfExperience());
+        data.put("location", profile.getLocation());
+        data.put("professionalSummary", profile.getProfessionalSummary());
+        data.put("certifications", profile.getCertifications() != null ? profile.getCertifications() : List.of());
+        data.put("linkedinUrl", profile.getLinkedinUrl());
+        data.put("githubUrl", profile.getGithubUrl());
+        data.put("portfolioUrl", profile.getPortfolioUrl());
+        data.put("authenticityRisk", "LOW");
+        data.put("authenticityExplanation", "Using applicant profile data.");
+        return data;
     }
 
     /**
-     * Build a searchable text representation of the profile.
-     */
-    private String buildProfileText(ApplicantProfile profile) {
-        StringBuilder sb = new StringBuilder();
-        if (profile.getFullName() != null) sb.append(profile.getFullName()).append(" ");
-        if (profile.getProfessionalTitle() != null) sb.append(profile.getProfessionalTitle()).append(" ");
-        if (profile.getEducation() != null) sb.append(profile.getEducation()).append(" ");
-        if (profile.getProfessionalSummary() != null) sb.append(profile.getProfessionalSummary()).append(" ");
-        if (profile.getLocation() != null) sb.append(profile.getLocation()).append(" ");
-        if (profile.getSkills() != null) sb.append(String.join(" ", profile.getSkills())).append(" ");
-        if (profile.getCertifications() != null) sb.append(String.join(" ", profile.getCertifications())).append(" ");
-        return sb.toString().toLowerCase();
-    }
-
-    /**
-     * Analyze job relevance based on profile.
-     */
-    private double analyzeJobRelevance(Job job, ApplicantProfile profile) {
-        String jobText = (job.getTitle() + " " + job.getDescription()).toLowerCase();
-        String profileText = buildProfileText(profile);
-
-        // Simple word overlap analysis
-        Set<String> jobWords = new HashSet<>(Arrays.asList(jobText.split("\\s+")));
-        Set<String> profileWords = new HashSet<>(Arrays.asList(profileText.split("\\s+")));
-
-        // Remove common stop words
-        Set<String> stopWords = Set.of("the", "a", "an", "and", "or", "is", "in", "at", "to", "for",
-                "of", "with", "on", "by", "as", "be", "that", "this", "it", "from", "will", "are",
-                "we", "you", "can", "should", "must", "our", "their", "have", "has");
-        jobWords.removeAll(stopWords);
-        profileWords.removeAll(stopWords);
-
-        if (jobWords.isEmpty()) return 70.0;
-
-        long overlap = jobWords.stream().filter(profileWords::contains).count();
-        double relevance = (overlap * 100.0 / jobWords.size());
-        return Math.min(relevance * 2, 100.0); // Scale up slightly since word overlap underestimates
-    }
-
-    /**
-     * Calculate the overall match score from individual components.
-     */
-    private double calculateOverallScore(double skills, double experience, double qualification,
-                                          double mandatory, double relevance) {
-        // Weighted scoring: mandatory criteria is most important
-        if (mandatory == 0.0) return 0.0; // Failed mandatory = fail
-
-        return skills * 0.30
-                + experience * 0.20
-                + qualification * 0.15
-                + mandatory * 0.20
-                + relevance * 0.15;
-    }
-
-    /**
-     * Analyze text content for AI-generated indicators.
-     * Uses heuristic-based analysis — never claims certainty.
-     */
-    public Map<String, Object> analyzeContentAuthenticity(String text) {
-        if (text == null || text.trim().isEmpty()) {
-            return Map.of("riskLevel", ContentRiskLevel.LOW, "confidence", 0.1);
-        }
-
-        String textLower = text.toLowerCase();
-        int indicatorCount = 0;
-
-        // Check for AI buzzword patterns
-        for (String indicator : AI_INDICATORS) {
-            if (textLower.contains(indicator)) indicatorCount++;
-        }
-
-        // Check for fabrication indicators
-        for (String indicator : FABRICATION_INDICATORS) {
-            if (textLower.contains(indicator)) indicatorCount += 3;
-        }
-
-        // Check for suspiciously perfect structure
-        String[] sentences = text.split("[.!?]+");
-        double avgSentenceLength = Arrays.stream(sentences)
-                .mapToInt(s -> s.trim().split("\\s+").length)
-                .average()
-                .orElse(0);
-
-        // AI text tends to have uniform sentence lengths
-        double sentenceLengthVariance = 0;
-        if (sentences.length > 2) {
-            double mean = avgSentenceLength;
-            sentenceLengthVariance = Arrays.stream(sentences)
-                    .mapToDouble(s -> Math.pow(s.trim().split("\\s+").length - mean, 2))
-                    .average()
-                    .orElse(0);
-        }
-        if (sentenceLengthVariance < 5 && sentences.length > 3) indicatorCount++;
-
-        // Check for excessive formality markers
-        long formalityMarkers = Arrays.stream(
-                new String[]{"furthermore", "moreover", "consequently", "subsequently", "henceforth"})
-                .filter(textLower::contains)
-                .count();
-        if (formalityMarkers >= 2) indicatorCount++;
-
-        // Calculate confidence
-        ContentRiskLevel riskLevel;
-        double confidence;
-
-        if (indicatorCount >= 5) {
-            riskLevel = ContentRiskLevel.HIGH;
-            confidence = Math.min(0.75, 0.5 + indicatorCount * 0.05);
-        } else if (indicatorCount >= 2) {
-            riskLevel = ContentRiskLevel.MEDIUM;
-            confidence = 0.3 + indicatorCount * 0.08;
-        } else {
-            riskLevel = ContentRiskLevel.LOW;
-            confidence = 0.1 + indicatorCount * 0.05;
-        }
-
-        return Map.of("riskLevel", riskLevel, "confidence", confidence);
-    }
-
-    /**
-     * Analyze a screening answer for relevance and AI content.
+     * Analyze a screening answer with AI.
      */
     public Map<String, Object> analyzeScreeningAnswer(String question, String answer) {
+        // Simple heuristic fallback (always available)
         Map<String, Object> result = new HashMap<>();
-
-        // AI content analysis
         Map<String, Object> aiAnalysis = analyzeContentAuthenticity(answer);
         result.put("aiContentRisk", aiAnalysis.get("riskLevel"));
         result.put("aiConfidence", aiAnalysis.get("confidence"));
 
-        // Relevance analysis
         double relevance = analyzeAnswerRelevance(question, answer);
         result.put("relevanceScore", relevance);
 
         String evaluationStatus;
-        if (relevance >= 60) {
-            evaluationStatus = "RELEVANT";
-        } else if (relevance >= 30) {
-            evaluationStatus = "NEEDS_REVIEW";
-        } else {
-            evaluationStatus = "IRRELEVANT";
-        }
+        if (relevance >= 60) evaluationStatus = "RELEVANT";
+        else if (relevance >= 30) evaluationStatus = "NEEDS_REVIEW";
+        else evaluationStatus = "IRRELEVANT";
         result.put("evaluationStatus", evaluationStatus);
 
         String explanation;
-        if (evaluationStatus.equals("RELEVANT")) {
-            explanation = "Answer appears relevant to the question and addresses the key topic.";
-        } else if (evaluationStatus.equals("NEEDS_REVIEW")) {
-            explanation = "Answer partially addresses the question but may need manual review for completeness.";
-        } else {
-            explanation = "Answer does not appear to address the question. The response may be off-topic or generic.";
-        }
+        if (evaluationStatus.equals("RELEVANT")) explanation = "Answer appears relevant and addresses the question.";
+        else if (evaluationStatus.equals("NEEDS_REVIEW")) explanation = "Answer partially addresses the question. Manual review recommended.";
+        else explanation = "Answer does not appear to address the question.";
         result.put("evaluationExplanation", explanation);
 
         return result;
     }
 
-    /**
-     * Analyze how relevant an answer is to the given question.
-     */
+    public Map<String, Object> analyzeContentAuthenticity(String text) {
+        if (text == null || text.trim().isEmpty()) {
+            return Map.of("riskLevel", ContentRiskLevel.LOW, "confidence", 0.1);
+        }
+
+        List<String> aiIndicators = List.of("leveraged", "spearheaded", "orchestrated", "synergized",
+                "utilized cutting-edge", "passionate about", "results-driven professional", "proven track record",
+                "detail-oriented", "self-motivated", "team player", "highly motivated");
+
+        String textLower = text.toLowerCase();
+        int count = 0;
+        for (String ind : aiIndicators) { if (textLower.contains(ind)) count++; }
+
+        String[] sentences = text.split("[.!?]+");
+        if (sentences.length > 3) {
+            double mean = Arrays.stream(sentences).mapToInt(s -> s.trim().split("\\s+").length).average().orElse(0);
+            double variance = Arrays.stream(sentences).mapToDouble(s -> Math.pow(s.trim().split("\\s+").length - mean, 2)).average().orElse(0);
+            if (variance < 5) count++;
+        }
+
+        ContentRiskLevel risk;
+        double confidence;
+        if (count >= 5) { risk = ContentRiskLevel.HIGH; confidence = Math.min(0.75, 0.5 + count * 0.05); }
+        else if (count >= 2) { risk = ContentRiskLevel.MEDIUM; confidence = 0.3 + count * 0.08; }
+        else { risk = ContentRiskLevel.LOW; confidence = 0.1 + count * 0.05; }
+
+        return Map.of("riskLevel", risk, "confidence", confidence);
+    }
+
     private double analyzeAnswerRelevance(String question, String answer) {
         if (answer == null || answer.trim().length() < 10) return 10.0;
         if (question == null || question.trim().isEmpty()) return 70.0;
 
-        String qLower = question.toLowerCase();
-        String aLower = answer.toLowerCase();
-
-        // Extract key terms from question (remove stop words)
         Set<String> stopWords = Set.of("the", "a", "an", "and", "or", "is", "in", "at", "to", "for",
                 "of", "with", "on", "by", "your", "you", "what", "how", "why", "explain",
                 "describe", "tell", "us", "about", "do", "have", "has", "are", "can", "would");
 
-        Set<String> questionKeywords = new HashSet<>(Arrays.asList(qLower.split("\\s+")));
-        questionKeywords.removeAll(stopWords);
-        questionKeywords.removeIf(w -> w.length() < 3);
+        Set<String> qWords = new HashSet<>(Arrays.asList(question.toLowerCase().split("\\s+")));
+        qWords.removeAll(stopWords);
+        qWords.removeIf(w -> w.length() < 3);
 
-        if (questionKeywords.isEmpty()) return 60.0;
+        if (qWords.isEmpty()) return 60.0;
+        String aLower = answer.toLowerCase();
+        long matchCount = qWords.stream().filter(aLower::contains).count();
+        double base = (matchCount * 100.0 / qWords.size());
 
-        // Count how many question keywords appear in the answer
-        long matchCount = questionKeywords.stream()
-                .filter(aLower::contains)
-                .count();
-
-        double baseRelevance = (matchCount * 100.0 / questionKeywords.size());
-
-        // Bonus for answer length (short answers are suspicious)
         int wordCount = answer.trim().split("\\s+").length;
-        double lengthBonus = 0;
-        if (wordCount >= 20) lengthBonus = 10;
-        if (wordCount >= 50) lengthBonus = 20;
+        if (wordCount >= 20) base += 10;
+        if (wordCount >= 50) base += 10;
 
-        return Math.min(100.0, baseRelevance + lengthBonus);
+        return Math.min(100.0, base);
     }
 
     public ScreeningResult getResultByApplicationId(String applicationId) {
         return screeningResultRepository.findByApplicationId(applicationId).orElse(null);
+    }
+
+    // Helper methods
+    private String getString(Map<String, Object> map, String key, String fallback) {
+        Object val = map.get(key);
+        return val != null ? val.toString() : fallback;
+    }
+    private double getDouble(Map<String, Object> map, String key, double fallback) {
+        Object val = map.get(key);
+        if (val instanceof Number) return ((Number) val).doubleValue();
+        return fallback;
+    }
+    private boolean getBool(Map<String, Object> map, String key, boolean fallback) {
+        Object val = map.get(key);
+        if (val instanceof Boolean) return (Boolean) val;
+        return fallback;
     }
 }

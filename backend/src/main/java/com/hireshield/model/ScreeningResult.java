@@ -34,6 +34,16 @@ public class ScreeningResult {
     private double overallScore;
     private String overallExplanation;
 
+    // Detailed Score Breakdown
+    private double skillsMatchScore;
+    private double experienceMatchScore;
+    private double qualificationMatchScore;
+    private double mandatoryScore;
+    private double preferredScore;
+    private double answerRelevanceScore;
+    private double profileResumeConsistencyScore;
+    private double crossValidationScore;
+
     // Detailed Breakdown
     @Builder.Default
     private List<CriterionResult> criteriaResults = new ArrayList<>();
@@ -49,8 +59,47 @@ public class ScreeningResult {
     private double resumeAiConfidence;
     private String resumeAnalysisDetails;
 
+    // AI Content Risk
+    private ContentRiskLevel aiContentRisk;
+    private String aiContentExplanation;
+
+    // Resume Authenticity
+    private String resumeAuthenticityRisk;
+    private String resumeAuthenticityExplanation;
+
+    // Profile-Resume Consistency
+    @Builder.Default
+    private List<Map<String, Object>> inconsistencies = new ArrayList<>();
+
+    // Cross-Validation
+    @Builder.Default
+    private List<Map<String, Object>> contradictions = new ArrayList<>();
+    private String crossValidationAssessment;
+
+    // Answer Analysis Results
+    @Builder.Default
+    private List<Map<String, Object>> answerAnalyses = new ArrayList<>();
+
+    // Failed Requirements
+    @Builder.Default
+    private List<String> failedRequirements = new ArrayList<>();
+
+    // Warnings
+    @Builder.Default
+    private List<String> warnings = new ArrayList<>();
+
+    // Reasons
+    @Builder.Default
+    private List<String> reasons = new ArrayList<>();
+
     // Parsed Resume Data
     private Map<String, Object> parsedResumeData;
+
+    // Human Review
+    private boolean needsHumanReview;
+    private String humanReviewDecision;
+    private String humanReviewedByUserId;
+    private LocalDateTime humanReviewedAt;
 
     @CreatedDate
     private LocalDateTime createdAt;

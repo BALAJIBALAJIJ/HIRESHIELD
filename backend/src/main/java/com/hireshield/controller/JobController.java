@@ -82,4 +82,13 @@ public class JobController {
         List<ScreeningQuestion> questions = jobService.getScreeningQuestions(jobId);
         return ResponseEntity.ok(ApiResponse.success("Screening questions retrieved", questions));
     }
+
+    @PostMapping("/{jobId}/screening-questions")
+    public ResponseEntity<ApiResponse> addScreeningQuestion(@PathVariable String jobId,
+                                                              @RequestBody ScreeningQuestion request,
+                                                              @AuthenticationPrincipal UserDetails userDetails) {
+        User user = authService.getCurrentUser(userDetails.getUsername());
+        ScreeningQuestion question = jobService.addScreeningQuestion(jobId, request, user);
+        return ResponseEntity.ok(ApiResponse.success("Screening question added", question));
+    }
 }

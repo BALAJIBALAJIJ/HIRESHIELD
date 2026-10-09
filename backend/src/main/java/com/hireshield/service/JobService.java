@@ -118,6 +118,41 @@ public class JobService {
         return screeningQuestionRepository.findByJobIdOrderByOrderIndexAsc(jobId);
     }
 
+    public ScreeningQuestion addScreeningQuestion(String jobId, ScreeningQuestion request, User currentUser) {
+        Job job = getJobById(jobId);
+        if (!job.getOrganizationId().equals(currentUser.getOrganizationId())) {
+            throw new RuntimeException("Unauthorized to add questions to this job");
+        }
+        if (request.getQuestion() == null || request.getQuestion().trim().isEmpty()) {
+            throw new RuntimeException("Question text is required");
+        }
+
+        // Determine next order index
+        List<ScreeningQuestion> existing = screeningQuestionRepository.findByJobIdOrderByOrderIndexAsc(jobId);
+        int nextIndex = existing.isEmpty() ? 0 : existing.get(existing.size() - 1).getOrderIndex() + 1;
+
+        ScreeningQuestion question = ScreeningQuestion.builder()
+                .jobId(jobId)
+                .question(request.getQuestion().trim())
+                .type(request.getType() != null ? request.getType() : "TEXT")
+                .orderIndex(nextIndex)
+                .required(request.isRequired())
+                .build();
+
+        question = screeningQuestionRepository.save(question);
+
+        // Update job's screening question IDs
+        List<String> questionIds = job.getScreeningQuestionIds();
+        if (questionIds == null) {
+            questionIds = new ArrayList<>();
+        }
+        questionIds.add(question.getId());
+        job.setScreeningQuestionIds(questionIds);
+        jobRepository.save(job);
+
+        return question;
+    }
+
     public void incrementApplicationCount(String jobId) {
         Job job = getJobById(jobId);
         job.setTotalApplications(job.getTotalApplications() + 1);

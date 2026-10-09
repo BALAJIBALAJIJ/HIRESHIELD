@@ -18,7 +18,7 @@ export default function MyApplications() {
   };
 
   const filtered = filter === 'ALL' ? applications : applications.filter(a => a.status === filter);
-  const filters = ['ALL', 'APPLIED', 'SCREENING', 'ELIGIBLE', 'REJECTED', 'SHORTLISTED', 'INTERVIEW', 'SELECTED'];
+  const filters = ['ALL', 'APPLIED', 'SCREENING', 'ELIGIBLE', 'NEEDS_REVIEW', 'REJECTED', 'SHORTLISTED', 'INTERVIEW', 'SELECTED'];
 
   if (loading) return <div className="main-content"><div className="loading-spinner"><div className="spinner" /></div></div>;
 
@@ -57,7 +57,12 @@ export default function MyApplications() {
                     <strong>Reason: </strong>{app.rejectionReason}
                   </div>
                 )}
-                {app.eligibilityExplanation && app.status !== 'REJECTED' && (
+                {app.status === 'NEEDS_REVIEW' && (
+                  <div style={{ padding: '0.5rem 0.75rem', background: 'rgba(245,158,11,0.08)', borderRadius: '6px', fontSize: '0.8rem', color: 'var(--warning-500)', marginTop: '0.5rem' }}>
+                    ⚠️ Your application is currently under review by the hiring team.
+                  </div>
+                )}
+                {app.eligibilityExplanation && app.status !== 'REJECTED' && app.status !== 'NEEDS_REVIEW' && (
                   <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>{app.eligibilityExplanation}</p>
                 )}
               </div>
